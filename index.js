@@ -1,6 +1,6 @@
 const tmi = require("tmi.js");
 const axios = require("axios");
-const express = require("express"); // Добавили express
+const express = require("express");
 
 // --- НАСТРОЙКИ ---
 const N8N_CHAT_LISTENER_URL = process.env.N8N_CHAT_LISTENER_URL;
@@ -65,11 +65,16 @@ async function startBot() {
     });
 }
 
-// Веб-сервер для Render, чтобы он не "убивал" бота
+// --- ВЕБ-СЕРВЕР ДЛЯ RENDER ---
 const app = express();
 const port = process.env.PORT || 10000;
 app.get('/', (req, res) => res.send('Twitch Bot is alive!'));
+
+// СНАЧАЛА ЗАПУСКАЕМ ВЕБ-СЕРВЕР. ОН СРАЗУ ГОТОВ ОТВЕЧАТЬ RENDER.
 app.listen(port, () => {
-    console.log(`[INFO] Web server запущен на порту ${port}.`);
-    startBot(); // Запускаем бота ПОСЛЕ старта веб-сервера
+    console.log(`[INFO] Web server запущен на порту ${port}. Render, я жив!`);
 });
+
+// И ТОЛЬКО ПОТОМ, ПАРАЛЛЕЛЬНО, ЗАПУСКАЕМ БОТА.
+// ЕГО МЕДЛЕННЫЙ СТАРТ БОЛЬШЕ НЕ МЕШАЕТ ВЕБ-СЕРВЕРУ.
+startBot();
