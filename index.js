@@ -2,13 +2,30 @@ const tmi = require("tmi.js");
 const axios = require("axios");
 const express = require("express");
 
-// --- НАСТРОЙКИ ---
+
+// --- НАСТРОЙКИ (обновленные) ---
 const N8N_CHAT_LISTENER_URL = process.env.N8N_CHAT_LISTENER_URL;
 const N8N_TOKEN_PROVIDER_URL = process.env.N8N_TOKEN_PROVIDER_URL;
+const N8N_TOKEN_REFRESH_URL = process.env.N8N_TOKEN_REFRESH_URL; // Наш новый вебхук
 const TWITCH_CHANNEL = "smaufttv";
 const BOT_USERNAME = "smaufttvbot";
 
 let client;
+
+/**
+ * Новая функция: заставляет n8n обновить токены прямо сейчас
+ */
+async function forceTokenRefresh() {
+    try {
+        console.log("[START] Запрос принудительного обновления токенов в n8n...");
+        await axios.post(N8N_TOKEN_REFRESH_URL);
+        console.log("[OK] n8n подтвердил обновление токенов.");
+        // Даем n8n 3 секунды, чтобы успеть записать данные в Google Sheets
+        await new Promise(resolve => setTimeout(resolve, 3000));
+    } catch (error) {
+        console.error("[ОШИБКА] n8n не смог обновить токены при старте:", error.message);
+    }
+}
 
 async function getFreshToken() {
     try {
@@ -23,6 +40,9 @@ async function getFreshToken() {
 
 async function startBot() {
     if (client && client.readyState() === "OPEN") return;
+
+    // ПЕРЕД ПОДКЛЮЧЕНИЕМ: заставляем n8n обновить токен
+    await forceTokenRefresh();
 
     const token = await getFreshToken();
     if (!token) {
@@ -57,7 +77,7 @@ async function startBot() {
             text: message,
         };
         axios.post(N8N_CHAT_LISTENER_URL, messageData)
-             .catch(err => console.error("[ОШИБКА] Не удалось отправить сообщение в n8n:", err.message));
+             .catch(err => console.error("[ОШИБКА] Ошибка n8n чат-листенер:", err.message));
     });
 
     client.connect().catch((error) => {
@@ -68,13 +88,11 @@ async function startBot() {
 // --- ВЕБ-СЕРВЕР ДЛЯ RENDER ---
 const app = express();
 const port = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Twitch Bot is alive!'));
+app.get('/', (req, res) => res.send('Twitch Bot is alive and refreshed!'));
 
-// СНАЧАЛА ЗАПУСКАЕМ ВЕБ-СЕРВЕР. ОН СРАЗУ ГОТОВ ОТВЕЧАТЬ RENDER.
 app.listen(port, () => {
-    console.log(`[INFO] Web server запущен на порту ${port}. Render, я жив!`);
+    console.log(`[INFO] Web server запущен на порту ${port}.`);
 });
 
-// И ТОЛЬКО ПОТОМ, ПАРАЛЛЕЛЬНО, ЗАПУСКАЕМ БОТА.
-// ЕГО МЕДЛЕННЫЙ СТАРТ БОЛЬШЕ НЕ МЕШАЕТ ВЕБ-СЕРВЕРУ.
+// ЗАПУСК
 startBot();
