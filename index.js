@@ -2,53 +2,69 @@ const tmi = require("tmi.js");
 const axios = require("axios");
 const express = require("express");
 
-
-// --- НАСТРОЙКИ (обновленные) ---
+// --- НАСТРОЙКИ ---
 const N8N_CHAT_LISTENER_URL = process.env.N8N_CHAT_LISTENER_URL;
 const N8N_TOKEN_PROVIDER_URL = process.env.N8N_TOKEN_PROVIDER_URL;
-const N8N_TOKEN_REFRESH_URL = process.env.N8N_TOKEN_REFRESH_URL; // Наш новый вебхук
+const N8N_TOKEN_REFRESH_URL = process.env.N8N_TOKEN_REFRESH_URL;
 const TWITCH_CHANNEL = "smaufttv";
 const BOT_USERNAME = "smaufttvbot";
 
 let client;
 
+// Заголовок для обхода рекламы ngrok
+const ngrokHeaders = { headers: { 'ngrok-skip-browser-warning': 'any' } };
+
 /**
- * Новая функция: заставляет n8n обновить токены прямо сейчас
+ * Заставляет n8n обновить токены
  */
 async function forceTokenRefresh() {
     try {
-        console.log("[START] Запрос принудительного обновления токенов в n8n...");
-        await axios.post(N8N_TOKEN_REFRESH_URL);
-        console.log("[OK] n8n подтвердил обновление токенов.");
-        // Даем n8n 3 секунды, чтобы успеть записать данные в Google Sheets
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        console.log("[START] Запрос обновления токенов в n8n...");
+        await axios.post(N8N_TOKEN_REFRESH_URL, {}, ngrokHeaders);
+        console.log("[OK] n8n подтвердил обновление.");
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Ждем 5 сек для записи в таблицу
     } catch (error) {
-        console.error("[ОШИБКА] n8n не смог обновить токены при старте:", error.message);
+        console.error("[!] Ошибка при форсированном обновлении:", error.message);
+        // Не бросаем ошибку, чтобы код шел дальше к попытке получить токен
     }
 }
 
+/**
+ * Получает токен из n8n
+ */
 async function getFreshToken() {
     try {
-        const response = await axios.get(N8N_TOKEN_PROVIDER_URL);
-        console.log("[OK] Получен свежий токен от n8n.");
-        return response.data;
+        const response = await axios.get(N8N_TOKEN_PROVIDER_URL, ngrokHeaders);
+        if (response.data && typeof response.data === 'string' && response.data.length > 5) {
+            console.log("[OK] Токен получен.");
+            return response.data;
+        }
+        console.error("[!] n8n вернул пустой или неверный токен.");
+        return null;
     } catch (error) {
-        console.error("[ОШИБКА] Не удалось получить токен от n8n:", error.message);
+        console.error("[!] Ошибка получения токена из n8n:", error.message);
         return null;
     }
 }
 
 async function startBot() {
-    if (client && client.readyState() === "OPEN") return;
-
-    // ПЕРЕД ПОДКЛЮЧЕНИЕМ: заставляем n8n обновить токен
+    console.log("--- Запуск цикла startBot ---");
+    
+    // 1. Пытаемся обновить
     await forceTokenRefresh();
 
+    // 2. Пытаемся взять токен
     const token = await getFreshToken();
+
     if (!token) {
-        console.log("Не удалось запустить бота без токена. Повтор через 1 минуту.");
+        console.log("Ждем 1 минуту перед следующей попыткой...");
         setTimeout(startBot, 60000);
         return;
+    }
+
+    // 3. Если клиент уже был, отключаем его перед созданием нового
+    if (client) {
+        try { await client.disconnect(); } catch(e) {}
     }
 
     client = new tmi.Client({
@@ -60,39 +76,35 @@ async function startBot() {
     });
 
     client.on("connected", () => {
-        console.log(`[OK] Бот ${BOT_USERNAME} успешно подключен к чату.`);
+        console.log(`✅ Бот ${BOT_USERNAME} в чате!`);
     });
 
     client.on("disconnected", (reason) => {
-        console.error(`[ОШИБКА] Бот отключен: ${reason}. Переподключение...`);
+        console.error(`❌ Бот отключен: ${reason}. Перезапуск через 10 сек...`);
         setTimeout(startBot, 10000);
     });
 
     client.on("message", (channel, tags, message, self) => {
         if (self) return;
-        const messageData = {
+        axios.post(N8N_CHAT_LISTENER_URL, {
             platform: "twitch",
             user: tags["display-name"],
             username: tags["username"],
             text: message,
-        };
-        axios.post(N8N_CHAT_LISTENER_URL, messageData)
-             .catch(err => console.error("[ОШИБКА] Ошибка n8n чат-листенер:", err.message));
+        }, ngrokHeaders).catch(err => console.error("Ошибка n8n listener:", err.message));
     });
 
     client.connect().catch((error) => {
-        console.error(`[КРИТИЧЕСКАЯ ОШИБКА] Не удалось подключиться:`, error);
+        console.error(`❌ Ошибка коннекта к Twitch:`, error.message);
+        setTimeout(startBot, 60000);
     });
 }
 
-// --- ВЕБ-СЕРВЕР ДЛЯ RENDER ---
+// --- ВЕБ-СЕРВЕР ---
 const app = express();
 const port = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Twitch Bot is alive and refreshed!'));
-
+app.get('/', (req, res) => res.send('Twitch Bot Status: Running'));
 app.listen(port, () => {
-    console.log(`[INFO] Web server запущен на порту ${port}.`);
+    console.log(`[INFO] Web server на порту ${port}.`);
+    startBot();
 });
-
-// ЗАПУСК
-startBot();
